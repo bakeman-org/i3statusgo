@@ -5,3 +5,9 @@ main
 
 tmpfile
 wifiname
+.marscode/
+.vscode/
+
+i3-modify/
+i3_4.24-1_amd64.deb
+i3-wm_4.24-1_amd64.deb
