@@ -14,8 +14,8 @@ bar {
 
 # todo
 
-1. nmcli get wifi name fail, output: W: ( 0% at disconnected)
-   but actual wifi name can get from
+1. [v] nmcli get wifi name fail, output: W: ( 0% at disconnected)
+   but actual wifi name can get from, seems fix already?
 
 ```bash
 $ nmcli -t -f "NAME,TYPE" connection show --active

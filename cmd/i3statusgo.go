@@ -110,7 +110,7 @@ func GetLocalIP() string {
 	return "127.0.0.1"
 }
 
-// GetWiFiInfo 通过nmcli获取真实的WiFi名称和信号强度（生产级实现）
+// GetWiFiInfo 通过nmcli获取真实的WiFi名称和信号强度（修复TYPE匹配问题）
 // 返回：(WiFi名称, 信号百分比, 错误)
 func GetWiFiInfo() (string, string, error) {
 	// 1. 检查nmcli是否存在
@@ -119,22 +119,35 @@ func GetWiFiInfo() (string, string, error) {
 	}
 
 	// 2. 获取当前活跃的WiFi连接
-	// nmcli -t -f ACTIVE,SSID,DEVICE dev wifi （获取所有WiFi）
-	// 优先获取已连接的WiFi：nmcli connection show --active
 	activeConnCmd := exec.Command("nmcli", "-t", "-f", "NAME,TYPE", "connection", "show", "--active")
 	connOutput, err := activeConnCmd.CombinedOutput()
 	if err != nil {
 		return "unknown", "0%", fmt.Errorf("get active connections: %w (output: %s)", err, string(connOutput))
 	}
 
-	// 解析活跃连接，找到wifi类型的连接名称
+	// 解析活跃连接，找到WiFi类型的连接名称（核心修复点）
 	var wifiConnName string
 	lines := strings.Split(strings.TrimSpace(string(connOutput)), "\n")
 	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
 		parts := strings.Split(line, ":")
-		if len(parts) == 2 && strings.TrimSpace(parts[1]) == "wifi" {
-			wifiConnName = strings.TrimSpace(parts[0])
-			break
+		// 确保分割后有至少2个部分，且过滤掉loopback
+		if len(parts) < 2 || strings.Contains(strings.ToLower(parts[1]), "loopback") {
+			continue
+		}
+
+		connName := strings.TrimSpace(parts[0])
+		connType := strings.TrimSpace(parts[1])
+
+		// 兼容多种WiFi TYPE值：wifi / 802-11-wireless / 802.11.wireless
+		if strings.Contains(strings.ToLower(connType), "wifi") ||
+			strings.Contains(strings.ToLower(connType), "wireless") {
+			wifiConnName = connName
+			break // 找到第一个WiFi连接即可
 		}
 	}
 
@@ -143,20 +156,53 @@ func GetWiFiInfo() (string, string, error) {
 	}
 
 	// 3. 获取该WiFi的详细信息（信号强度）
-	wifiDetailCmd := exec.Command("nmcli", "device", "wifi", "show", wifiConnName)
-	detailOutput, err := wifiDetailCmd.CombinedOutput()
+	// 修复：使用dev status获取当前连接的WiFi设备，再查信号
+	devStatusCmd := exec.Command("nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "dev", "status")
+	devOutput, err := devStatusCmd.CombinedOutput()
 	if err != nil {
-		// 备用方案：通过dev status获取信号
 		return GetWiFiInfoFallback(wifiConnName)
 	}
 
-	// 解析信号强度（signal: 54）
-	matches := signalRegex.FindStringSubmatch(string(detailOutput))
-	if len(matches) < 2 {
-		return wifiConnName, "0%", nil
+	// 找到WiFi对应的设备名
+	var wifiDevice string
+	devLines := strings.Split(strings.TrimSpace(string(devOutput)), "\n")
+	for _, line := range devLines {
+		parts := strings.Split(line, ":")
+		if len(parts) >= 3 &&
+			(strings.Contains(strings.ToLower(parts[1]), "wifi") || strings.Contains(strings.ToLower(parts[1]), "wireless")) &&
+			strings.Contains(strings.ToLower(parts[2]), "connected") {
+			wifiDevice = strings.TrimSpace(parts[0])
+			break
+		}
 	}
 
-	signalVal := strings.TrimSpace(matches[1])
+	// 通过设备名获取信号强度（更可靠）
+	var signalVal string
+	if wifiDevice != "" {
+		wifiSignalCmd := exec.Command("nmcli", "-t", "-f", "SIGNAL", "dev", "wifi", "show", wifiDevice)
+		signalOutput, err := wifiSignalCmd.CombinedOutput()
+		if err == nil {
+			signalVal = strings.TrimSpace(string(signalOutput))
+		}
+	}
+
+	// 备用解析：如果直接获取失败，用正则匹配
+	if signalVal == "" {
+		wifiDetailCmd := exec.Command("nmcli", "dev", "wifi", "list", "ifname", wifiDevice)
+		detailOutput, err := wifiDetailCmd.CombinedOutput()
+		if err == nil {
+			matches := signalRegex.FindStringSubmatch(string(detailOutput))
+			if len(matches) >= 2 {
+				signalVal = matches[1]
+			}
+		}
+	}
+
+	// 最终容错
+	if signalVal == "" {
+		return GetWiFiInfoFallback(wifiConnName)
+	}
+
 	return wifiConnName, fmt.Sprintf("%s%%", signalVal), nil
 }
 
@@ -356,7 +402,7 @@ func main() {
 	// 3. 预加载首次网络统计（避免首次输出网速为0的延迟）
 	_, _, _, _ = GetNetworkStats()
 
-	// 4. 定时输出状态（5秒刷新）
+	// 4. 定时输出状态（2秒刷新）
 	ticker = time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
