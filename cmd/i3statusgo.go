@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath" // 新增：用于拼接文件路径
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -347,7 +349,126 @@ func GetMemStats() (memTotal string, swapTotal string) {
 	return
 }
 
-// FormatStatusLine 格式化输出行（严格匹配示例格式）
+// GetBatteryInfo 增强版：获取电池状态、百分比、剩余能量、满电能量、实时功率
+// 返回：(充电状态, 电量百分比, 剩余能量(Wh), 满电能量(Wh), 实时功率(W), 错误)
+func GetBatteryInfo() (string, string, string, string, string, error) {
+	// Linux系统电池信息的标准路径
+	powerSupplyDir := "/sys/class/power_supply/"
+
+	// 优先检查BAT0（最常见的电池设备）
+	batteryDir := filepath.Join(powerSupplyDir, "BAT0")
+	if fi, err := os.Stat(batteryDir); err != nil || !fi.IsDir() {
+		fmt.Fprintf(os.Stderr, "WARN: BAT0 not found, try to scan all BAT devices\n")
+		dirEntries, err := os.ReadDir(powerSupplyDir)
+		if err != nil {
+			return "N/A", "0%", "0 Wh", "0 Wh", "0 W", fmt.Errorf("read power supply dir failed: %w (path: %s)", err, powerSupplyDir)
+		}
+
+		// 调试：输出遍历到的所有目录
+		var foundDirs []string
+		for _, entry := range dirEntries {
+			foundDirs = append(foundDirs, entry.Name())
+		}
+		fmt.Fprintf(os.Stderr, "DEBUG: power_supply dir entries: %v\n", foundDirs)
+
+		// 遍历查找BAT开头的电池目录（兼容大小写）
+		var batDirFound string
+		for _, entry := range dirEntries {
+			if entry.IsDir() && strings.HasPrefix(strings.ToUpper(entry.Name()), "BAT") {
+				batDirFound = filepath.Join(powerSupplyDir, entry.Name())
+				fmt.Fprintf(os.Stderr, "DEBUG: found battery dir: %s\n", batDirFound)
+				break
+			}
+		}
+
+		if batDirFound == "" {
+			return "No battery", "0%", "0 Wh", "0 Wh", "0 W", nil
+		}
+		batteryDir = batDirFound
+	}
+
+	// 确认电池目录存在
+	if _, err := os.Stat(batteryDir); err != nil {
+		return "No battery", "0%", "0 Wh", "0 Wh", "0 W", fmt.Errorf("battery dir not exist: %w (path: %s)", err, batteryDir)
+	}
+
+	// 1. 读取电量百分比（原有逻辑）
+	capacityPath := filepath.Join(batteryDir, "capacity")
+	capacityBytes, err := os.ReadFile(capacityPath)
+	if err != nil {
+		return "Error", "0%", "0 Wh", "0 Wh", "0 W", fmt.Errorf("read capacity failed: %w (path: %s)", err, capacityPath)
+	}
+	capacity := strings.TrimSpace(string(capacityBytes))
+
+	// 2. 读取充电状态（原有逻辑）
+	statusPath := filepath.Join(batteryDir, "status")
+	statusBytes, err := os.ReadFile(statusPath)
+	if err != nil {
+		return "Error", capacity + "%", "0 Wh", "0 Wh", "0 W", fmt.Errorf("read status failed: %w (path: %s)", err, statusPath)
+	}
+	status := strings.TrimSpace(string(statusBytes))
+	// 标准化状态
+	switch strings.ToLower(status) {
+	case "charging":
+		status = "Charging"
+	case "discharging":
+		status = "Discharging"
+	case "full":
+		status = "Full"
+	case "not charging":
+		status = "Not charging"
+	default:
+		status = fmt.Sprintf("Unknown(%s)", status)
+	}
+
+	// 3. 读取当前剩余能量（energy_now，μWh → 转换为Wh）
+	energyNowPath := filepath.Join(batteryDir, "energy_now")
+	energyNowStr := "0"
+	var energyNowWh float64
+	energyNowBytes, err := os.ReadFile(energyNowPath)
+	if err == nil {
+		energyNowStr = strings.TrimSpace(string(energyNowBytes))
+		// 转换：μWh → Wh（除以1e6）
+		energyNowInt, _ := strconv.ParseInt(energyNowStr, 10, 64)
+		energyNowWh = float64(energyNowInt) / 1000000.0
+	} else {
+		fmt.Fprintf(os.Stderr, "WARN: read energy_now failed: %v (path: %s)\n", err, energyNowPath)
+	}
+	energyNowDisplay := fmt.Sprintf("%.2f Wh", energyNowWh)
+
+	// 4. 读取满电能量（energy_full，μWh → 转换为Wh）
+	energyFullPath := filepath.Join(batteryDir, "energy_full")
+	energyFullStr := "0"
+	var energyFullWh float64
+	energyFullBytes, err := os.ReadFile(energyFullPath)
+	if err == nil {
+		energyFullStr = strings.TrimSpace(string(energyFullBytes))
+		energyFullInt, _ := strconv.ParseInt(energyFullStr, 10, 64)
+		energyFullWh = float64(energyFullInt) / 1000000.0
+	} else {
+		fmt.Fprintf(os.Stderr, "WARN: read energy_full failed: %v (path: %s)\n", err, energyFullPath)
+	}
+	energyFullDisplay := fmt.Sprintf("%.2f Wh", energyFullWh)
+
+	// 5. 读取实时功率（power_now，μW → 转换为W，充电为正，放电为负）
+	powerNowPath := filepath.Join(batteryDir, "power_now")
+	powerNowStr := "0"
+	var powerNowW float64
+	powerNowBytes, err := os.ReadFile(powerNowPath)
+	if err == nil {
+		powerNowStr = strings.TrimSpace(string(powerNowBytes))
+		powerNowInt, _ := strconv.ParseInt(powerNowStr, 10, 64)
+		powerNowW = float64(powerNowInt) / 1000000.0
+	} else {
+		fmt.Fprintf(os.Stderr, "WARN: read power_now failed: %v (path: %s)\n", err, powerNowPath)
+	}
+	// 格式化功率显示（充电+W，放电-W）
+	powerNowDisplay := fmt.Sprintf("%.2f W", powerNowW)
+
+	return status, capacity + "%", energyNowDisplay, energyFullDisplay, powerNowDisplay, nil
+}
+
+// FormatStatusLine 格式化输出行（含完整电池实时信息）
 func FormatStatusLine() string {
 	// 1. 网络信息
 	netName, signal, downSpeed, upSpeed := GetNetworkStats()
@@ -362,16 +483,28 @@ func FormatStatusLine() string {
 	// 4. 内存/交换分区
 	memTotal, swapTotal := GetMemStats()
 
-	// 5. 当前时间
+	// 5. 电池信息（增强版）
+	batteryStatus, batteryCapacity, batteryNow, batteryFull, batteryPower, err := GetBatteryInfo()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARN: get battery info failed: %v\n", err)
+		batteryStatus = "Error"
+		batteryCapacity = "0%"
+		batteryNow = "0.00 Wh"
+		batteryFull = "0.00 Wh"
+		batteryPower = "0.00 W"
+	}
+
+	// 6. 当前时间
 	now := time.Now().Format("2006-01-02 15:04:05")
 
-	// 拼接格式（严格匹配示例）
+	// 拼接格式（新增电池实时能量/功率）
 	line := fmt.Sprintf(
-		"W: ( %s at %s) %s |S ↓ %s ↑ %s | Disk Used %s | Full %s |C: %s |M: %s |S: %s | %s",
+		"W: ( %s at %s) %s |S ↓ %s ↑ %s | Disk Used %s | Full %s |C: %s |M: %s |S: %s | B: %s (%s, %s/%s, %s) | %s",
 		signal, netName, ip,
 		downSpeed, upSpeed,
 		diskUsage, diskTotal,
 		cpuUsage, memTotal, swapTotal,
+		batteryStatus, batteryCapacity, batteryNow, batteryFull, batteryPower,
 		now,
 	)
 	return line
