@@ -367,7 +367,7 @@ func FormatStatusLine() string {
 
 	// 拼接格式（严格匹配示例）
 	line := fmt.Sprintf(
-		"W: ( %s at %s) %s |S ↓ %s ↑ %s | FULL %s | %s | %s | %s | %s | %s",
+		"W: ( %s at %s) %s |S ↓ %s ↑ %s | Disk Used %s | Full %s |C: %s |M: %s |S: %s | %s",
 		signal, netName, ip,
 		downSpeed, upSpeed,
 		diskUsage, diskTotal,
@@ -403,7 +403,7 @@ func main() {
 	_, _, _, _ = GetNetworkStats()
 
 	// 4. 定时输出状态（2秒刷新）
-	ticker = time.NewTicker(2 * time.Second)
+	ticker = time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	// 首次输出

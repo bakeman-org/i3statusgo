@@ -8,7 +8,8 @@ bar {
     # path to your i3statusgo binary
     status_command /home/etcix/code/gotest/i3statusgo/i3statusgo
     position bottom
-    font pango:DejaVu Sans Mono 16
+    # since I output so many thing and mark text of them, maybe the font size should not be too large
+    font pango:DejaVu Sans Mono 12
 }
 ```
 
