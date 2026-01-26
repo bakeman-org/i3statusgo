@@ -1,0 +1,370 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"os/signal"
+	"regexp"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/mem"
+
+	// 给gopsutil的net包起别名，解决和标准库net的冲突
+	netstat "github.com/shirou/gopsutil/v3/net"
+	// 标准库net保留，用于获取IP
+	"net"
+)
+
+// 网络状态缓存（用于计算网速）
+type netStats struct {
+	recvBytes uint64
+	sendBytes uint64
+	timestamp time.Time
+}
+
+var (
+	lastNetStats netStats                  // 上一次网络统计数据
+	ticker       *time.Ticker              // 定时刷新器
+	quitChan     = make(chan os.Signal, 1) // 信号通道
+	// 预编译正则表达式，解析nmcli输出
+	signalRegex = regexp.MustCompile(`signal:\s*(\d+)`)
+)
+
+// BytesToHuman 字节转人类可读格式（KB/GiB等）
+func BytesToHuman(b uint64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+		TB = GB * 1024
+	)
+
+	switch {
+	case b >= TB:
+		return fmt.Sprintf("%.2f TiB", float64(b)/TB)
+	case b >= GB:
+		return fmt.Sprintf("%.2f GiB", float64(b)/GB)
+	case b >= MB:
+		return fmt.Sprintf("%.2f MiB", float64(b)/MB)
+	case b >= KB:
+		return fmt.Sprintf("%.2f KB", float64(b)/KB)
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}
+
+// BytesPerSecToHuman 字节/秒转人类可读格式（KB/s等）
+func BytesPerSecToHuman(b float64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+	)
+
+	switch {
+	case b >= MB:
+		return fmt.Sprintf("%.2f MB/s", b/MB)
+	case b >= KB:
+		return fmt.Sprintf("%.2f KB/s", b/KB)
+	default:
+		return fmt.Sprintf("%.0f B/s", b)
+	}
+}
+
+// GetLocalIP 获取本地非回环IPv4地址（优先活跃网络接口）
+func GetLocalIP() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "127.0.0.1"
+	}
+
+	for _, iface := range ifaces {
+		// 跳过未启动、回环、虚拟接口
+		if iface.Flags&net.FlagUp == 0 ||
+			iface.Flags&net.FlagLoopback != 0 ||
+			strings.HasPrefix(iface.Name, "docker") ||
+			strings.HasPrefix(iface.Name, "veth") {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok || ipNet.IP.IsLoopback() {
+				continue
+			}
+
+			if ip4 := ipNet.IP.To4(); ip4 != nil {
+				return ip4.String()
+			}
+		}
+	}
+	return "127.0.0.1"
+}
+
+// GetWiFiInfo 通过nmcli获取真实的WiFi名称和信号强度（生产级实现）
+// 返回：(WiFi名称, 信号百分比, 错误)
+func GetWiFiInfo() (string, string, error) {
+	// 1. 检查nmcli是否存在
+	if _, err := exec.LookPath("nmcli"); err != nil {
+		return "unknown", "0%", fmt.Errorf("nmcli not found: %w", err)
+	}
+
+	// 2. 获取当前活跃的WiFi连接
+	// nmcli -t -f ACTIVE,SSID,DEVICE dev wifi （获取所有WiFi）
+	// 优先获取已连接的WiFi：nmcli connection show --active
+	activeConnCmd := exec.Command("nmcli", "-t", "-f", "NAME,TYPE", "connection", "show", "--active")
+	connOutput, err := activeConnCmd.CombinedOutput()
+	if err != nil {
+		return "unknown", "0%", fmt.Errorf("get active connections: %w (output: %s)", err, string(connOutput))
+	}
+
+	// 解析活跃连接，找到wifi类型的连接名称
+	var wifiConnName string
+	lines := strings.Split(strings.TrimSpace(string(connOutput)), "\n")
+	for _, line := range lines {
+		parts := strings.Split(line, ":")
+		if len(parts) == 2 && strings.TrimSpace(parts[1]) == "wifi" {
+			wifiConnName = strings.TrimSpace(parts[0])
+			break
+		}
+	}
+
+	if wifiConnName == "" {
+		return "disconnected", "0%", nil
+	}
+
+	// 3. 获取该WiFi的详细信息（信号强度）
+	wifiDetailCmd := exec.Command("nmcli", "device", "wifi", "show", wifiConnName)
+	detailOutput, err := wifiDetailCmd.CombinedOutput()
+	if err != nil {
+		// 备用方案：通过dev status获取信号
+		return GetWiFiInfoFallback(wifiConnName)
+	}
+
+	// 解析信号强度（signal: 54）
+	matches := signalRegex.FindStringSubmatch(string(detailOutput))
+	if len(matches) < 2 {
+		return wifiConnName, "0%", nil
+	}
+
+	signalVal := strings.TrimSpace(matches[1])
+	return wifiConnName, fmt.Sprintf("%s%%", signalVal), nil
+}
+
+// GetWiFiInfoFallback 备用方案：通过nmcli dev wifi获取信号（兼容不同nmcli版本）
+func GetWiFiInfoFallback(ssid string) (string, string, error) {
+	wifiListCmd := exec.Command("nmcli", "-t", "-f", "SSID,SIGNAL", "dev", "wifi")
+	output, err := wifiListCmd.CombinedOutput()
+	if err != nil {
+		return ssid, "0%", fmt.Errorf("fallback get signal: %w", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, line := range lines {
+		parts := strings.Split(line, ":")
+		if len(parts) == 2 && strings.TrimSpace(parts[0]) == ssid {
+			signal := strings.TrimSpace(parts[1])
+			return ssid, fmt.Sprintf("%s%%", signal), nil
+		}
+	}
+
+	return ssid, "0%", nil
+}
+
+// GetNetworkStats 获取真实网络状态（名称、信号、网速）- 生产级实现
+func GetNetworkStats() (name string, signal string, downSpeed, upSpeed string) {
+	// 1. 获取真实WiFi信息
+	wifiName, wifiSignal, err := GetWiFiInfo()
+
+	if err != nil {
+		// 容错：记录错误但不崩溃，使用默认值
+		fmt.Fprintf(os.Stderr, "WARN: get wifi info failed: %v\n", err)
+		name = "unknown"
+		signal = "0%"
+	} else {
+		name = wifiName
+		signal = wifiSignal
+	}
+
+	// 2. 获取真实网络流量（解决net包冲突后）
+	netIOList, err := netstat.IOCounters(true)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARN: get net io failed: %v\n", err)
+		return name, signal, "0 B/s", "0 B/s"
+	}
+
+	// 遍历接口，获取非回环、非虚拟接口的总流量
+	var currRecv, currSend uint64
+	for _, io := range netIOList {
+		// 跳过回环、docker、虚拟接口
+		if io.Name == "lo" ||
+			strings.HasPrefix(io.Name, "docker") ||
+			strings.HasPrefix(io.Name, "veth") ||
+			strings.HasPrefix(io.Name, "br-") {
+			continue
+		}
+		currRecv += io.BytesRecv
+		currSend += io.BytesSent
+	}
+
+	// 3. 计算网速
+	now := time.Now()
+	if lastNetStats.timestamp.IsZero() {
+		lastNetStats = netStats{recvBytes: currRecv, sendBytes: currSend, timestamp: now}
+		return name, signal, "0 B/s", "0 B/s"
+	}
+
+	// 时间差（秒）
+	deltaTime := now.Sub(lastNetStats.timestamp).Seconds()
+	if deltaTime <= 0 {
+		deltaTime = 1
+	}
+
+	// 流量差
+	deltaRecv := float64(currRecv - lastNetStats.recvBytes)
+	deltaSend := float64(currSend - lastNetStats.sendBytes)
+
+	// 转换为人类可读格式
+	downSpeed = BytesPerSecToHuman(deltaRecv / deltaTime)
+	upSpeed = BytesPerSecToHuman(deltaSend / deltaTime)
+
+	// 更新缓存
+	lastNetStats = netStats{recvBytes: currRecv, sendBytes: currSend, timestamp: now}
+
+	return name, signal, downSpeed, upSpeed
+}
+
+// GetDiskStats 获取磁盘总容量和使用率（根分区）- 生产级容错
+func GetDiskStats() (total string, usage string) {
+	stats, err := disk.Usage("/")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARN: get disk usage failed: %v\n", err)
+		return "0 GiB", "0.00%"
+	}
+
+	total = BytesToHuman(stats.Total)
+	usage = fmt.Sprintf("%.2f%%", stats.UsedPercent)
+	return
+}
+
+// GetCPUUsage 获取CPU使用率（优化：非阻塞采样）
+func GetCPUUsage() string {
+	// 异步采样，避免阻塞主循环
+	percentChan := make(chan float64, 1)
+	go func() {
+		percent, err := cpu.Percent(0, false) // 0秒采样（获取累计使用率）
+		if err != nil || len(percent) == 0 {
+			percentChan <- 0.0
+			return
+		}
+		percentChan <- percent[0]
+	}()
+
+	// 超时保护
+	select {
+	case percent := <-percentChan:
+		return fmt.Sprintf("%.2f", percent)
+	case <-time.After(500 * time.Millisecond):
+		return "0.00"
+	}
+}
+
+// GetMemStats 获取内存和交换分区使用（总容量）- 生产级容错
+func GetMemStats() (memTotal string, swapTotal string) {
+	// 内存
+	memInfo, err := mem.VirtualMemory()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARN: get mem info failed: %v\n", err)
+		memTotal = "0 GiB"
+	} else {
+		memTotal = BytesToHuman(memInfo.Total)
+	}
+
+	// 交换分区
+	swapInfo, err := mem.SwapMemory()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARN: get swap info failed: %v\n", err)
+		swapTotal = "0 GiB"
+	} else {
+		swapTotal = BytesToHuman(swapInfo.Total)
+	}
+
+	return
+}
+
+// FormatStatusLine 格式化输出行（严格匹配示例格式）
+func FormatStatusLine() string {
+	// 1. 网络信息
+	netName, signal, downSpeed, upSpeed := GetNetworkStats()
+	ip := GetLocalIP()
+
+	// 2. 磁盘信息
+	diskTotal, diskUsage := GetDiskStats()
+
+	// 3. CPU使用率
+	cpuUsage := GetCPUUsage()
+
+	// 4. 内存/交换分区
+	memTotal, swapTotal := GetMemStats()
+
+	// 5. 当前时间
+	now := time.Now().Format("2006-01-02 15:04:05")
+
+	// 拼接格式（严格匹配示例）
+	line := fmt.Sprintf(
+		"W: ( %s at %s) %s |S ↓ %s ↑ %s | FULL %s | %s | %s | %s | %s | %s",
+		signal, netName, ip,
+		downSpeed, upSpeed,
+		diskUsage, diskTotal,
+		cpuUsage, memTotal, swapTotal,
+		now,
+	)
+	return line
+}
+
+// InitSignalHandler 初始化信号处理（捕获Ctrl+C）
+func InitSignalHandler() {
+	signal.Notify(quitChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	go func() {
+		<-quitChan
+		fmt.Println("\ni3status-clone: exiting due to signal.")
+		if ticker != nil {
+			ticker.Stop()
+		}
+		os.Exit(0)
+	}()
+}
+
+func main() {
+	// 1. 启动提示（模拟i3status的输出格式检测）
+	fmt.Fprintln(os.Stderr, "i3status-clone: trying to auto-detect output_format setting")
+	fmt.Fprintln(os.Stderr, "i3status-clone: falling back to \"none\"")
+	fmt.Fprintln(os.Stderr) // 空行
+
+	// 2. 初始化信号处理
+	InitSignalHandler()
+
+	// 3. 预加载首次网络统计（避免首次输出网速为0的延迟）
+	_, _, _, _ = GetNetworkStats()
+
+	// 4. 定时输出状态（5秒刷新）
+	ticker = time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	// 首次输出
+	fmt.Println(FormatStatusLine())
+
+	// 循环输出
+	for range ticker.C {
+		fmt.Println(FormatStatusLine())
+	}
+}
