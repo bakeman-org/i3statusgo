@@ -9,7 +9,7 @@ go build -o i3statusgo cmd/i3statusgo.go
 go install cmd/i3statusgo.go
 
 # or
-go install -x -v -a gitee.com/EEPPEE_admin/i3statusgo/i3statusgo@latest
+go install -x -v -a -race -msan -asan -work gitee.com/EEPPEE_admin/i3statusgo/cmd@latest
 ```
 
 # screenshot
@@ -30,4 +30,18 @@ bar {
     # NOTE: since I output so many thing and mark text of them, maybe the font size should not be too large
     font pango:DejaVu Sans Mono 12
 }
+```
+
+# ref links
+
+-learn how to setup package executable from goreleaser: https://github.com/goreleaser/goreleaser/blob/main/go.mod
+
+```bash
+# here is idea
+go install github.com/goreleaser/goreleaser/v2@latest
+# and the go.mod define below
+# module github.com/goreleaser/goreleaser/v2
+# and the main.go is in root folder
+
+# so I guess, I don't need to setup cmd/ folder, just expose i3statusgo.go into root folder
 ```
