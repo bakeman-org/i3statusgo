@@ -1,5 +1,5 @@
 build-i3statusgo:
-	go build .
+	go build cmd/i3statusgo.go
 
 clean:
 	-rm i3statusgo v1
