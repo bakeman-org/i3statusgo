@@ -1,8 +1,9 @@
 build-i3statusgo:
-	go build -o i3statusgo i3statusgo.go
-	
+	go build .
+
 clean:
-	rm i3statusgo
+	-rm i3statusgo v1
+	
 
 # private target for myself
 __local-deploy:

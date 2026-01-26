@@ -1,4 +1,4 @@
-module gitee.com/EEPPEE_admin/i3statusgo/v1
+module gitee.com/EEPPEE_admin/i3statusgo
 
 go 1.25.4
 
