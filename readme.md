@@ -8,7 +8,10 @@ go build -o i3statusgo cmd/i3statusgo.go
 # will install to your $GOPATH/bin, usually at $HOME/go/bin, should add $HOME/go/bin to your $PATH
 go install cmd/i3statusgo.go
 
+# or
+go install gitee.com/EEPPEE_admin/i3statusgo/cmd/i3statusgo@latest
 ```
+
 
 # screenshot
 

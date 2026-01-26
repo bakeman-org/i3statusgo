@@ -1,5 +1,5 @@
 build-i3statusgo:
-	go build -o i3statusgo cmd/i3statusgo.go
+	go build -o i3statusgo cmd/i3statusgo/i3statusgo.go
 	
 
 # private target for myself
