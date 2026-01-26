@@ -9,7 +9,7 @@ go build -o i3statusgo cmd/i3statusgo.go
 go install cmd/i3statusgo.go
 
 # or
-go install -x -v -a -race -msan -asan -work gitee.com/EEPPEE_admin/i3statusgo/cmd@latest
+go install -x -v -a -race -msan -asan -work gitee.com/EEPPEE_admin/i3statusgo@latest
 ```
 
 # screenshot
