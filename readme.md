@@ -9,9 +9,8 @@ go build -o i3statusgo cmd/i3statusgo.go
 go install cmd/i3statusgo.go
 
 # or
-go install gitee.com/EEPPEE_admin/i3statusgo/cmd/i3statusgo@latest
+go install -x -v -a gitee.com/EEPPEE_admin/i3statusgo/i3statusgo@latest
 ```
-
 
 # screenshot
 
