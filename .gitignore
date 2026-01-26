@@ -1,8 +1,9 @@
-i3statusgo
+# i3statusgo
 
 a.out
 main
 
+./i3statusgo
 tmpfile
 wifiname
 .marscode/
