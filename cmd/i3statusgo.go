@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath" // 新增：用于拼接文件路径
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -112,7 +112,7 @@ func GetLocalIP() string {
 	return "127.0.0.1"
 }
 
-// GetWiFiInfo 通过nmcli获取真实的WiFi名称和信号强度（修复TYPE匹配问题）
+// GetWiFiInfo 通过nmcli获取真实的WiFi名称和信号强度
 // 返回：(WiFi名称, 信号百分比, 错误)
 func GetWiFiInfo() (string, string, error) {
 	// 1. 检查nmcli是否存在
@@ -536,7 +536,7 @@ func main() {
 	_, _, _, _ = GetNetworkStats()
 
 	// 4. 定时输出状态（2秒刷新）
-	ticker = time.NewTicker(1 * time.Second)
+	ticker = time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	// 首次输出

@@ -32,9 +32,14 @@ bar {
 }
 ```
 
+# TODO
+
+1. learn how to setup i3bar color, it seems i3bar take json format as input? or should I add color to i3statusgo output?
+2. ref links is useless at least for now
+
 # ref links
 
--learn how to setup package executable from goreleaser: https://github.com/goreleaser/goreleaser/blob/main/go.mod
+- learn how to setup package executable from goreleaser: https://github.com/goreleaser/goreleaser/blob/main/go.mod
 
 ```bash
 # here is idea
