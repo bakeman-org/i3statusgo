@@ -246,3 +246,103 @@ apt-cache depends i3 | grep -i i3status
 4. **兜底**：若修改出错，可通过 `sudo apt install --reinstall i3 i3-wm` 恢复官方包。
 
 这样你就彻底摆脱了 i3wm 对 i3status 的依赖，且全程在本地完成，无需复杂的仓库配置！
+
+You want to add a specific package to APT's ignore list so that it won't be automatically upgraded when you run system update commands like `apt upgrade`. Here are two reliable methods to achieve this, with step-by-step instructions:
+
+---
+
+## Method 1: Use `apt-mark hold` (Simplest & Most Common)
+
+This is the easiest way to lock a package from upgrades, and it’s the recommended approach for most use cases.
+
+### Step 1: Basic commands
+
+1. **Lock the package** (replace `<package-name>` with the actual package name, e.g., `nginx`):
+
+   ```bash
+   sudo apt-mark hold <package-name>
+   ```
+
+   Example (lock `nginx`):
+
+   ```bash
+   sudo apt-mark hold nginx
+   ```
+
+   Output (success): `nginx set on hold.`
+
+2. **Check which packages are locked** (verify the package is in the hold list):
+
+   ```bash
+   apt-mark showhold
+   ```
+
+   Output (if `nginx` is locked): `nginx`
+
+3. **Unlock the package** (if you want to allow upgrades later):
+   ```bash
+   sudo apt-mark unhold <package-name>
+   ```
+   Example:
+   ```bash
+   sudo apt-mark unhold nginx
+   ```
+   Output: `nginx cancelled hold.`
+
+## Method 2: Use `/etc/apt/preferences` (More Flexible)
+
+This method uses APT’s preference system to set a low priority for the package, preventing upgrades. It’s useful if you need advanced rules (e.g., lock multiple packages or specific versions).
+
+### Step 1: Create/Edit the preferences file
+
+1. Open the file with a text editor (e.g., nano):
+
+   ```bash
+   sudo nano /etc/apt/preferences
+   ```
+
+2. Add the following content (replace `<package-name>` with your package):
+
+   ```
+   # Lock <package-name> from upgrades
+   Package: <package-name>
+   Pin: release *
+   Pin-Priority: -1
+   ```
+
+   - `Package`: Specifies the target package (use `*` to lock all packages, but this is not recommended).
+   - `Pin: release *`: Matches all repository releases.
+   - `Pin-Priority: -1`: Tells APT to never upgrade this package (priority < 0 means "reject").
+
+3. Save and exit (for nano: press `Ctrl+O`, then `Enter`, then `Ctrl+X`).
+
+### Step 2: Verify the configuration
+
+Run a **simulated upgrade** to confirm the package won’t be upgraded:
+
+```bash
+sudo apt update && sudo apt upgrade -s
+```
+
+Look for lines like:
+
+```
+The following packages have been kept back:
+  <package-name>
+```
+
+This confirms the package is ignored during upgrades.
+
+---
+
+### How to Verify the Lock Works
+
+Run the simulated upgrade command above (`apt upgrade -s`). If the package is listed under "kept back", the lock is effective.
+
+---
+
+### Summary
+
+1. **Simplest method**: Use `sudo apt-mark hold <package-name>` to lock a package, and `sudo apt-mark unhold <package-name>` to unlock it.
+2. **Advanced method**: Edit `/etc/apt/preferences` and set `Pin-Priority: -1` for the target package to block upgrades.
+3. **Verification**: Always test with `apt upgrade -s` (simulated upgrade) to confirm the package is "kept back".

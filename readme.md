@@ -7,17 +7,17 @@ go build -o i3statusgo cmd/i3statusgo.go
 
 # will install to your $GOPATH/bin, usually at $HOME/go/bin, should add $HOME/go/bin to your $PATH
 go install cmd/i3statusgo.go
-
-# or
-go install -x -v -a -race -msan -asan -work gitee.com/EEPPEE_admin/i3statusgo@latest
 ```
 
 # screenshot
 
-- C stand for CPU, M stand for Memory, S stand for Swap
-  Full stand for Full Disk Total, Disk Used stand for Disk Used Percentage
-  W stand for Wifi name, S stand for net speed(I guess, I don't know how to show net speed)
+- `C stand for CPU, M stand for Memory, S stand for Swap,
+Full stand for Full Disk Total, Disk Used stand for Disk Used Percentage,
+W stand for Wifi name, S stand for net speed(I guess, I don't know how to show net speed),
+B stand for Battery Percentage`
   ![screenshot](./screenshot/preview.png)
+- ignore `apt upgrade for i3-wm package`
+  ![](./screenshot/apt-ignore-upgrade-i3wm.png)
 
 # setup for i3 config in `~/.config/i3/config`
 
