@@ -16,7 +16,6 @@ import (
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/mem"
 
-	// 给gopsutil的net包起别名，解决和标准库net的冲突
 	netstat "github.com/shirou/gopsutil/v3/net"
 	// 标准库net保留，用于获取IP
 	"net"
@@ -158,7 +157,6 @@ func GetWiFiInfo() (string, string, error) {
 	}
 
 	// 3. 获取该WiFi的详细信息（信号强度）
-	// 修复：使用dev status获取当前连接的WiFi设备，再查信号
 	devStatusCmd := exec.Command("nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "dev", "status")
 	devOutput, err := devStatusCmd.CombinedOutput()
 	if err != nil {
@@ -178,7 +176,7 @@ func GetWiFiInfo() (string, string, error) {
 		}
 	}
 
-	// 通过设备名获取信号强度（更可靠）
+	// 通过设备名获取信号强度
 	var signalVal string
 	if wifiDevice != "" {
 		wifiSignalCmd := exec.Command("nmcli", "-t", "-f", "SIGNAL", "dev", "wifi", "show", wifiDevice)
@@ -188,7 +186,7 @@ func GetWiFiInfo() (string, string, error) {
 		}
 	}
 
-	// 备用解析：如果直接获取失败，用正则匹配
+	// 如果直接获取失败，用正则匹配
 	if signalVal == "" {
 		wifiDetailCmd := exec.Command("nmcli", "dev", "wifi", "list", "ifname", wifiDevice)
 		detailOutput, err := wifiDetailCmd.CombinedOutput()
@@ -208,7 +206,7 @@ func GetWiFiInfo() (string, string, error) {
 	return wifiConnName, fmt.Sprintf("%s%%", signalVal), nil
 }
 
-// GetWiFiInfoFallback 备用方案：通过nmcli dev wifi获取信号（兼容不同nmcli版本）
+// GetWiFiInfoFallback 通过nmcli dev wifi获取信号（兼容不同nmcli版本）
 func GetWiFiInfoFallback(ssid string) (string, string, error) {
 	wifiListCmd := exec.Command("nmcli", "-t", "-f", "SSID,SIGNAL", "dev", "wifi")
 	output, err := wifiListCmd.CombinedOutput()
@@ -326,14 +324,17 @@ func GetCPUUsage() string {
 	}
 }
 
-// GetMemStats 获取内存和交换分区使用（总容量）- 生产级容错
-func GetMemStats() (memTotal string, swapTotal string) {
+// GetMemStats 获取内存/交换分区的已用+总容量（新增已用显示）- 生产级容错
+// 返回值从 (memTotal, swapTotal) 改为 (memUsed, memTotal, swapUsed, swapTotal)
+func GetMemStats() (memUsed string, memTotal string, swapUsed string, swapTotal string) {
 	// 内存
 	memInfo, err := mem.VirtualMemory()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "WARN: get mem info failed: %v\n", err)
+		memUsed = "0 GiB"
 		memTotal = "0 GiB"
 	} else {
+		memUsed = BytesToHuman(memInfo.Used) // 新增：获取已用内存
 		memTotal = BytesToHuman(memInfo.Total)
 	}
 
@@ -341,8 +342,10 @@ func GetMemStats() (memTotal string, swapTotal string) {
 	swapInfo, err := mem.SwapMemory()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "WARN: get swap info failed: %v\n", err)
+		swapUsed = "0 GiB"
 		swapTotal = "0 GiB"
 	} else {
+		swapUsed = BytesToHuman(swapInfo.Used) // 新增：获取已用交换分区
 		swapTotal = BytesToHuman(swapInfo.Total)
 	}
 
@@ -468,7 +471,7 @@ func GetBatteryInfo() (string, string, string, string, string, error) {
 	return status, capacity + "%", energyNowDisplay, energyFullDisplay, powerNowDisplay, nil
 }
 
-// FormatStatusLine 格式化输出行（含完整电池实时信息）
+// FormatStatusLine 格式化输出行（含完整电池实时信息+内存已用显示）
 func FormatStatusLine() string {
 	// 1. 网络信息
 	netName, signal, downSpeed, upSpeed := GetNetworkStats()
@@ -480,8 +483,8 @@ func FormatStatusLine() string {
 	// 3. CPU使用率
 	cpuUsage := GetCPUUsage()
 
-	// 4. 内存/交换分区
-	memTotal, swapTotal := GetMemStats()
+	// 4. 内存/交换分区（修改点：接收已用+总容量）
+	memUsed, memTotal, swapUsed, swapTotal := GetMemStats()
 
 	// 5. 电池信息（增强版）
 	batteryStatus, batteryCapacity, batteryNow, batteryFull, batteryPower, err := GetBatteryInfo()
@@ -497,13 +500,13 @@ func FormatStatusLine() string {
 	// 6. 当前时间
 	now := time.Now().Format("2006-01-02 15:04:05")
 
-	// 拼接格式（新增电池实时能量/功率）
+	// 拼接格式（修改点：内存显示为 已用/总，交换分区同理）
 	line := fmt.Sprintf(
-		"W: ( %s at %s) %s |S ↓ %s ↑ %s | Disk Used %s | Full %s |C: %s |M: %s |S: %s | B: %s (%s, %s/%s, %s) | %s",
+		"W: ( %s at %s) %s |S ↓ %s ↑ %s | Disk Used %s | Full %s |C: %s%% |M: %s/%s |S: %s/%s | B: %s (%s, %s/%s, %s) | %s",
 		signal, netName, ip,
 		downSpeed, upSpeed,
 		diskUsage, diskTotal,
-		cpuUsage, memTotal, swapTotal,
+		cpuUsage, memUsed, memTotal, swapUsed, swapTotal, // 内存/交换分区改为 已用/总
 		batteryStatus, batteryCapacity, batteryNow, batteryFull, batteryPower,
 		now,
 	)
