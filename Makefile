@@ -1,6 +1,12 @@
 build-i3statusgo:
 	go build cmd/i3statusgo.go
 
+build-c:
+	gcc -O2 -Wall -Wextra -o i3statusgo-c i3statusgo.c
+
+clean-c:
+	-rm i3statusgo-c
+
 clean:
 	-rm i3statusgo v1
 	
